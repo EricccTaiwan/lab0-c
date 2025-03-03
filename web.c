@@ -36,6 +36,7 @@ typedef struct {
     char filename[512];
     off_t offset; /* for support Range */
     size_t end;
+    char user_agent[256]; /* User-Agent */
 } http_request_t;
 
 static void rio_readinitb(rio_t *rp, int fd)
@@ -197,6 +198,10 @@ static void parse_request(int fd, http_request_t *req)
             if (req->end != 0)
                 req->end++;
         }
+        if (strncmp(buf, "User-Agent:", 11) == 0) {
+            strncpy(req->user_agent, buf + 12, sizeof(req->user_agent) - 1);
+            req->user_agent[sizeof(req->user_agent) - 1] = '\0';
+        }
     }
     char *filename = uri;
     if (uri[0] == '/') {
@@ -216,10 +221,14 @@ static void parse_request(int fd, http_request_t *req)
     url_decode(filename, req->filename, MAXLINE);
 }
 
-char *web_recv(int fd, struct sockaddr_in *clientaddr)
+char *web_recv(int fd, struct sockaddr_in *clientaddr, int *is_curl)
 {
     http_request_t req;
     parse_request(fd, &req);
+
+    *is_curl = 0;
+    if (strstr(req.user_agent, "curl") != NULL)
+        *is_curl = 1;
 
     char *p = req.filename;
     /* Change '/' to ' ' */
@@ -249,6 +258,7 @@ int web_eventmux(char *buf)
     if (result < 0)
         return -1;
 
+    int is_curl = 0;
     if (server_fd > 0 && FD_ISSET(server_fd, &listenset)) {
         FD_CLR(server_fd, &listenset);
         struct sockaddr_in clientaddr;
@@ -256,16 +266,24 @@ int web_eventmux(char *buf)
         int web_connfd =
             accept(server_fd, (struct sockaddr *) &clientaddr, &clientlen);
 
-        char *p = web_recv(web_connfd, &clientaddr);
-        char *buffer =
-            "HTTP/1.1 200 OK\r\n%s%s%s%s%s%s"
-            "Content-Type: text/html\r\n\r\n"
-            "<html><head><style>"
-            "body{font-family: monospace; font-size: 13px;}"
-            "td {padding: 1.5px 6px;}"
-            "</style><link rel=\"shortcut icon\" href=\"#\">"
-            "<h1>Good Job, Eric!</h1>"
-            "</head><body><table>\n";
+        char *p = web_recv(web_connfd, &clientaddr, &is_curl);
+        char *buffer = NULL;
+        if (is_curl) {
+            buffer =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/plain\r\n\r\n"
+                "Good Job, Eric! Request from curl.\n";
+        } else {
+            buffer =
+                "HTTP/1.1 200 OK\r\n%s%s%s%s%s%s"
+                "Content-Type: text/html\r\n\r\n"
+                "<html><head><style>"
+                "body{font-family: monospace; font-size: 13px;}"
+                "td {padding: 1.5px 6px;}"
+                "</style><link rel=\"shortcut icon\" href=\"#\">"
+                "<h1>Good Job, Eric! Request from browser.</h1>"
+                "</head><body><table>\n";
+        }
         web_send(web_connfd, buffer);
         strncpy(buf, p, strlen(p) + 1);
         free(p);
