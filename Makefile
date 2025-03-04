@@ -85,4 +85,8 @@ distclean: clean
 	-rm -f .cmd_history
 	-rm -rf .out
 
+massif: qtest
+	valgrind --tool=massif --massif-out-file=.massif.out ./$< -v 3 -f traces/trace-17-complexity.cmd
+	massif-visualizer .massif.out
+
 -include $(deps)
