@@ -64,9 +64,49 @@ static void differentiate(int64_t *exec_times,
         exec_times[i] = after_ticks[i] - before_ticks[i];
 }
 
+/*
+ * Reference : https://github.com/oreparaz/dudect/blob/master/src/dudect.h#L203
+ */
+static int cmp(const int64_t *a, const int64_t *b)
+{
+    if (*a == *b)
+        return 0;
+    return (*a > *b) ? 1 : -1;
+}
+
+/*
+ * Reference : https://github.com/oreparaz/dudect/blob/master/src/dudect.h#L209
+ */
+static int64_t percentile(int64_t *a_sorted, double which, size_t size)
+{
+    size_t array_position = (size_t) ((double) size * (double) which);
+    assert(array_position < size);
+    return a_sorted[array_position];
+}
+
+/*
+ * set different thresholds for cropping measurements.
+ * the exponential tendency is meant to approximately match
+ * the measurements distribution, but there's not more science
+ * than that.
+ * Reference : https://github.com/oreparaz/dudect/blob/master/src/dudect.h#L221
+ */
+static void prepare_percentiles(int64_t *exec_times)
+{
+    qsort(exec_times, N_MEASURES, sizeof(int64_t),
+          (int (*)(const void *, const void *)) cmp);
+    for (size_t i = 0; i < N_MEASURES; i++) {
+        exec_times[i] = percentile(
+            exec_times, 1 - (pow(0.5, 10 * (double) (i + 1) / N_MEASURES)),
+            N_MEASURES);
+    }
+}
+
 static void update_statistics(const int64_t *exec_times, uint8_t *classes)
 {
-    for (size_t i = 0; i < N_MEASURES; i++) {
+    // Reference :
+    // https://github.com/oreparaz/dudect/blob/master/src/dudect.h#L303
+    for (size_t i = 10; i < N_MEASURES; i++) {
         int64_t difference = exec_times[i];
         /* CPU cycle counter overflowed or dropped measurement */
         if (difference <= 0)
@@ -133,6 +173,7 @@ static bool doit(int mode)
 
     bool ret = measure(before_ticks, after_ticks, input_data, mode);
     differentiate(exec_times, before_ticks, after_ticks);
+    prepare_percentiles(exec_times);
     update_statistics(exec_times, classes);
     ret &= report();
 
@@ -170,8 +211,11 @@ static bool test_const(char *text, int mode)
     return result;
 }
 
-#define DUT_FUNC_IMPL(op) \
-    bool is_##op##_const(void) { return test_const(#op, DUT(op)); }
+#define DUT_FUNC_IMPL(op)                \
+    bool is_##op##_const(void)           \
+    {                                    \
+        return test_const(#op, DUT(op)); \
+    }
 
 #define _(x) DUT_FUNC_IMPL(x)
 DUT_FUNCS
