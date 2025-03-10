@@ -130,20 +130,20 @@ get_all_match_positions() {
   done <<< "$targets"
 }
 
+# Predefined trailer keys.
+readonly trailers=(
+  'CC' 'Change-Id' 'Closes'
+  'Acked-by' 'Co-authored-by' 'Reported-by' 'Reviewed-by'
+  'Signed-off-by' 'Suggested-by' 'Tested-by'
+)
+
 # Build regex for detecting commit trailers.
 build_commit_trailer_regex() {
-  local -a keys specials standalones trailers
+  local -a keys specials standalones
   local _ each key separators
 
   # Get the trailer separators from git config (default to ':' if not set)
   separators=$(git config --get trailer.separators || echo ':')
-
-  # Predefined trailer keys.
-  trailers=(
-    'CC' 'Change-Id' 'Closes'
-    'Acked-by' 'Co-authored-by' 'Reported-by' 'Reviewed-by'
-    'Signed-off-by' 'Suggested-by' 'Tested-by'
-  )
 
   # Standalone keys (those that do not require a value).
   standalones=(
@@ -487,6 +487,48 @@ validate_commit_message() {
   fi
 }
 
+# Standardize manually entered trailers in the commit message.
+standardize_trailers() {
+  local i line key value email formatted_line
+  # Regex to match a trailer line with format "Key: value <email>"
+  local regex='^([A-Za-z-]+):[[:blank:]]*([^<]+)[[:blank:]]*<([^<>]+)>'
+
+  # Create a lookup dictionary (associative array) for case-insensitive comparison
+  declare -A trailer_lookup
+  for t in "${trailers[@]}"; do
+    trailer_lookup["${t,,}"]="$t"  # Store the original key, indexed by lowercase key
+  done
+
+  # Loop through each line of the commit message stored in COMMIT_MSG_LINES
+  for i in "${!COMMIT_MSG_LINES[@]}"; do
+    line="${COMMIT_MSG_LINES[$i]}"
+    if [[ "$line" =~ $regex ]]; then
+      # Extract the key, value, and email from the matching groups
+      key="${BASH_REMATCH[1]}"
+      value="${BASH_REMATCH[2]}"
+      email="${BASH_REMATCH[3]}"
+
+      # Convert the extracted key to lowercase for lookup
+      local key_lower="${key,,}"
+
+      # Check if the lowercase key exists in the trailer lookup table
+      if [[ -n "${trailer_lookup[$key_lower]}" ]]; then
+        # Use the original key from trailers to maintain consistent casing
+        key="${trailer_lookup[$key_lower]}"
+        
+        # Trim leading/trailing whitespace and collapse multiple spaces in the value.
+        value=$(echo "$value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/[[:space:]][[:space:]]*/ /g')
+
+        # Reconstruct the standardized trailer line.
+        COMMIT_MSG_LINES[$i]="$key: $value <$email>"
+      fi
+    fi
+  done
+
+  # Write the standardized commit message lines back to the commit message file
+  printf "%s\n" "${COMMIT_MSG_LINES[@]}" > "$COMMIT_MSG_FILE"
+}
+
 unset GREP_OPTIONS
 
 CHANGE_ID_AFTER="Bug|Issue|Test"
@@ -679,6 +721,8 @@ while true; do
   read_commit_message
 
   validate_commit_message
+  
+  standardize_trailers
 
   add_change_id
 
